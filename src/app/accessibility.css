@@ -1,0 +1,111 @@
+// ============================================
+// Global Styles for Accessibility
+// ============================================
+
+/* Skip Links */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: #0369A1;
+  color: white;
+  padding: 8px;
+  text-decoration: none;
+  z-index: 9999;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* Focus Visible Styles */
+*:focus-visible {
+  outline: 2px solid #0369A1;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Remove default focus outline and use focus-visible */
+*:focus {
+  outline: none;
+}
+
+/* Screen Reader Only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Not Screen Reader Only */
+.sr-not-only {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* High Contrast Mode Support */
+@media (prefers-contrast: high) {
+  :root {
+    --color-border-light: #000000;
+    --color-border-medium: #000000;
+    --color-text-tertiary: #000000;
+  }
+}
+
+/* Forced Colors Mode Support */
+@media (forced-colors: active) {
+  * {
+    forced-color-adjust: auto;
+  }
+}
+
+/* Text Spacing for Accessibility */
+.accessible-text-spacing {
+  line-height: 1.5;
+  letter-spacing: 0.12em;
+  word-spacing: 0.16em;
+}
+
+/* Link Focus Indicators */
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* Button Focus States */
+button:focus-visible:not(:disabled) {
+  outline: 2px solid #0369A1;
+  outline-offset: 2px;
+}
+
+/* Skip to Main Content for Keyboard Users */
+#main-content:focus {
+  outline: 2px solid #0369A1;
+  outline-offset: 4px;
+}
