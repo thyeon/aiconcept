@@ -283,7 +283,7 @@ export const useAppStore = create<AppState>()(
       ...createSessionStateSlice(set),
 
       // Processing State (not persisted)
-      ...createProcessingStateSlice(set as (partial: ProcessingStateMap | Partial<ProcessingStateMap>) => void),
+      ...createProcessingStateSlice(set as (partial: ProcessingStateMap | Partial<ProcessingStateMap> | ((state: ProcessingStateMap) => ProcessingStateMap | Partial<ProcessingStateMap>)) => void),
     }),
     {
       name: 'ai-doc-platform-storage',
