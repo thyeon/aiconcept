@@ -350,8 +350,8 @@ export const useCasesList = () =>
     // Sort
     filteredCases.sort((a, b) => {
       const [field, order] = sortBy.split('-') as [keyof Case, 'asc' | 'desc']
-      const aValue = a[field]
-      const bValue = b[field]
+      const aValue = a[field] ?? ''
+      const bValue = b[field] ?? ''
 
       if (aValue < bValue) return order === 'asc' ? -1 : 1
       if (aValue > bValue) return order === 'asc' ? 1 : -1
