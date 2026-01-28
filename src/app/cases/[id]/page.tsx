@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, Suspense } from 'react'
+import React, { useEffect, useState, useMemo, Suspense } from 'react'
 import { useAppStore, useActiveCase } from '@/lib/store'
 import { mockCases, mockTimelineEvents, mockProcessingLogs, mockDecisionTrace } from '@/lib/mock-data'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -32,7 +32,9 @@ function CaseDetailContent({ id }: { id: string }) {
   const router = useRouter()
   const activeCase = useActiveCase()
   const setActiveCaseId = useAppStore((state) => state.setActiveCaseId)
-  const cases = useAppStore((state) => state.cases.allIds.map((id) => state.cases.byId[id]))
+  const allIds = useAppStore((state) => state.cases.allIds)
+  const byId = useAppStore((state) => state.cases.byId)
+  const cases = useMemo(() => allIds.map((id) => byId[id]), [allIds, byId])
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilters, setStatusFilters] = useState<string[]>([])
 
