@@ -1,16 +1,43 @@
 'use client'
 
-import React, { useState, Suspense } from 'react'
+/**
+ * Extraction Editor Page - Split View Layout
+ *
+ * This page allows users to review and edit extracted data fields while
+ * visually validating against the source document.
+ *
+ * Layout:
+ * - Left: Document viewer with bounding box highlights
+ * - Right: Field editor cards grouped by category
+ *
+ * Key UX Features:
+ * - Bidirectional sync: hover/click fields ↔ document highlights
+ * - Color-coded confidence indicators (green/amber/red)
+ * - Collapsible document panel for smaller screens
+ * - Only active/hovered fields highlighted by default (toggle for all)
+ * - Zoom, pan, and page navigation for document inspection
+ */
+
+import React, { useState, useCallback, Suspense, useRef, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 import { WorkflowStepper } from '@/components/features/workflow-stepper'
 import {
   FieldGroup,
   CompactExtractedField,
   type ExtractedField,
   type FieldGroup as FieldGroupType,
+  confidenceConfig,
 } from '@/components/features/extraction-editor'
+import {
+  ExtractionDocumentViewer,
+  createBoundingBoxesFromFields,
+  type BoundingBox,
+} from '@/components/features/extraction-document-viewer'
+import { useExtractionSync } from '@/hooks/useExtractionSync'
 import {
   FileText,
   User,
@@ -22,18 +49,149 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Eye,
+  EyeOff,
+  Layers,
 } from 'lucide-react'
 import { useWorkflowContext } from '@/hooks/useWorkflowContext'
+import { cn } from '@/lib/utils'
+
+// ============================================
+// Enhanced Field Card with Hover/Click Sync
+// ============================================
+
+interface SyncedFieldCardProps {
+  field: ExtractedField & { groupName?: string }
+  isActive: boolean
+  isHovered: boolean
+  onHover: (fieldId: string | null) => void
+  onClick: (fieldId: string) => void
+  onEdit: (fieldId: string) => void
+  registerRef: (fieldId: string, ref: HTMLElement | null) => void
+}
+
+function SyncedFieldCard({
+  field,
+  isActive,
+  isHovered,
+  onHover,
+  onClick,
+  onEdit,
+  registerRef,
+}: SyncedFieldCardProps) {
+  const config = confidenceConfig[field.confidenceLevel]
+  const isHighlighted = isActive || isHovered
+
+  return (
+    <div
+      ref={(ref) => registerRef(field.id, ref)}
+      className={cn(
+        'relative p-3 rounded-lg border-2 transition-all duration-200 cursor-pointer',
+        'hover:shadow-md',
+        isHighlighted && 'ring-2 ring-offset-2',
+        field.confidenceLevel === 'high' && 'border-emerald-300 hover:border-emerald-400',
+        field.confidenceLevel === 'medium' && 'border-amber-300 hover:border-amber-400',
+        field.confidenceLevel === 'low' && 'border-red-300 hover:border-red-400',
+        isActive && field.confidenceLevel === 'high' && 'ring-emerald-500 bg-emerald-50',
+        isActive && field.confidenceLevel === 'medium' && 'ring-amber-500 bg-amber-50',
+        isActive && field.confidenceLevel === 'low' && 'ring-red-500 bg-red-50',
+        isHovered && !isActive && 'bg-gray-50',
+        field.status === 'edited' && 'border-l-4 border-l-primary',
+      )}
+      onMouseEnter={() => onHover(field.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={() => onClick(field.id)}
+    >
+      {/* Source indicator - shows if field has document mapping */}
+      {field.sourceRegion && (
+        <div
+          className={cn(
+            'absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center',
+            'text-white text-xs font-bold shadow-sm',
+            field.confidenceLevel === 'high' && 'bg-emerald-500',
+            field.confidenceLevel === 'medium' && 'bg-amber-500',
+            field.confidenceLevel === 'low' && 'bg-red-500',
+          )}
+          title={`Page ${field.sourceRegion.page}`}
+        >
+          {field.sourceRegion.page}
+        </div>
+      )}
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          {/* Label */}
+          <div className="flex items-center gap-2 mb-1">
+            <p className="text-xs font-medium text-text-secondary">{field.label}</p>
+            {field.isRequired && <span className="text-error text-xs">*</span>}
+            {field.status === 'edited' && (
+              <Badge variant="outline" className="text-xs h-4 px-1">Edited</Badge>
+            )}
+          </div>
+
+          {/* Value */}
+          <p className="text-sm font-medium truncate" title={field.value}>
+            {field.value}
+          </p>
+
+          {/* Confidence bar */}
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className={cn(
+                  'h-full rounded-full transition-all',
+                  field.confidenceLevel === 'high' && 'bg-emerald-500',
+                  field.confidenceLevel === 'medium' && 'bg-amber-500',
+                  field.confidenceLevel === 'low' && 'bg-red-500',
+                )}
+                style={{ width: `${field.confidence}%` }}
+              />
+            </div>
+            <span className={cn('text-xs font-medium', config.color)}>
+              {field.confidence}%
+            </span>
+          </div>
+        </div>
+
+        {/* Edit button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 opacity-0 group-hover:opacity-100 transition-opacity"
+          onClick={(e) => {
+            e.stopPropagation()
+            onEdit(field.id)
+          }}
+        >
+          Edit
+        </Button>
+      </div>
+
+      {/* Low confidence warning */}
+      {field.confidenceLevel === 'low' && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-red-600">
+          <AlertTriangle className="h-3 w-3" />
+          <span>Manual review required</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// Main Page Component
+// ============================================
 
 function ExtractionEditorPageContent() {
-  const { caseId, activeCase, navigateToStep, updateCaseExtraction } = useWorkflowContext()
-  const [activeFieldId, setActiveFieldId] = useState<string | null>(null)
+  const { caseId, navigateToStep } = useWorkflowContext()
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     new Set(['claimant', 'claim', 'provider'])
   )
 
-  // Mock extraction data
+  // Mock extraction data with source regions for document mapping
   const mockFieldGroups: FieldGroupType[] = [
     {
       id: 'claimant',
@@ -49,7 +207,7 @@ function ExtractionEditorPageContent() {
           confidence: 96,
           confidenceLevel: 'high',
           status: 'auto-accepted',
-          sourceRegion: { page: 1, x: 120, y: 200, width: 300, height: 30 },
+          sourceRegion: { page: 1, x: 50, y: 145, width: 200, height: 20 },
           isRequired: true,
         },
         {
@@ -60,7 +218,7 @@ function ExtractionEditorPageContent() {
           confidence: 94,
           confidenceLevel: 'high',
           status: 'auto-accepted',
-          sourceRegion: { page: 1, x: 120, y: 235, width: 200, height: 25 },
+          sourceRegion: { page: 1, x: 350, y: 145, width: 150, height: 20 },
           isRequired: true,
         },
         {
@@ -71,7 +229,7 @@ function ExtractionEditorPageContent() {
           confidence: 78,
           confidenceLevel: 'medium',
           status: 'review-suggested',
-          sourceRegion: { page: 1, x: 120, y: 270, width: 400, height: 25 },
+          sourceRegion: { page: 1, x: 50, y: 195, width: 450, height: 20 },
         },
       ],
     },
@@ -89,6 +247,7 @@ function ExtractionEditorPageContent() {
           confidence: 100,
           confidenceLevel: 'high',
           status: 'auto-accepted',
+          sourceRegion: { page: 1, x: 350, y: 265, width: 150, height: 20 },
           isRequired: true,
         },
         {
@@ -99,7 +258,7 @@ function ExtractionEditorPageContent() {
           confidence: 98,
           confidenceLevel: 'high',
           status: 'auto-accepted',
-          sourceRegion: { page: 1, x: 80, y: 320, width: 180, height: 25 },
+          sourceRegion: { page: 1, x: 50, y: 265, width: 150, height: 20 },
           isRequired: true,
         },
         {
@@ -110,7 +269,7 @@ function ExtractionEditorPageContent() {
           confidence: 92,
           confidenceLevel: 'high',
           status: 'auto-accepted',
-          sourceRegion: { page: 2, x: 200, y: 150, width: 150, height: 25 },
+          sourceRegion: { page: 2, x: 50, y: 265, width: 120, height: 25 },
           isRequired: true,
         },
         {
@@ -119,9 +278,9 @@ function ExtractionEditorPageContent() {
           value: 'Emergency Room Visit',
           originalValue: 'Emergency Room Visit',
           confidence: 65,
-          confidenceLevel: 'medium',
-          status: 'review-suggested',
-          sourceRegion: { page: 1, x: 120, y: 400, width: 250, height: 25 },
+          confidenceLevel: 'low',
+          status: 'review-required',
+          sourceRegion: { page: 1, x: 50, y: 315, width: 200, height: 20 },
         },
       ],
     },
@@ -139,7 +298,7 @@ function ExtractionEditorPageContent() {
           confidence: 88,
           confidenceLevel: 'medium',
           status: 'review-suggested',
-          sourceRegion: { page: 2, x: 80, y: 80, width: 300, height: 30 },
+          sourceRegion: { page: 2, x: 50, y: 110, width: 250, height: 20 },
           isRequired: true,
         },
         {
@@ -150,7 +309,7 @@ function ExtractionEditorPageContent() {
           confidence: 45,
           confidenceLevel: 'low',
           status: 'review-required',
-          sourceRegion: { page: 2, x: 80, y: 115, width: 150, height: 25 },
+          sourceRegion: { page: 2, x: 50, y: 160, width: 120, height: 20 },
         },
         {
           id: 'field-10',
@@ -160,19 +319,48 @@ function ExtractionEditorPageContent() {
           confidence: 52,
           confidenceLevel: 'low',
           status: 'review-required',
-          sourceRegion: { page: 2, x: 80, y: 145, width: 150, height: 25 },
+          sourceRegion: { page: 2, x: 300, y: 160, width: 120, height: 20 },
         },
       ],
     },
   ]
 
-  // Flattened list for compact view
+  // Flatten fields for sync hook
   const allFields = mockFieldGroups.flatMap((group) =>
     group.fields.map((field) => ({
       ...field,
+      groupId: group.id,
       groupName: group.name,
     }))
   )
+
+  // Use extraction sync hook for coordinated state
+  const {
+    activeFieldId,
+    hoveredFieldId,
+    currentPage,
+    showAllHighlights,
+    isDocumentPanelOpen,
+    setActiveField,
+    setHoveredField,
+    setCurrentPage,
+    setShowAllHighlights,
+    toggleDocumentPanel,
+    registerFieldRef,
+    totalPages,
+  } = useExtractionSync({
+    fields: allFields,
+    initialPage: 1,
+  })
+
+  // Create bounding boxes for document viewer
+  const boundingBoxes = createBoundingBoxesFromFields(allFields)
+
+  // Mock document pages
+  const documentPages = [
+    { pageNumber: 1, imageUrl: '/mock-page-1.png', width: 600, height: 780 },
+    { pageNumber: 2, imageUrl: '/mock-page-2.png', width: 600, height: 780 },
+  ]
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups((prev) => {
@@ -188,230 +376,271 @@ function ExtractionEditorPageContent() {
 
   const handleFieldSave = async (fieldId: string, value: string) => {
     console.log('Saving field:', fieldId, 'with value:', value)
-    // Simulate API call
     await new Promise((resolve) => setTimeout(resolve, 1000))
     console.log('Field saved successfully')
   }
 
+  // Stats
+  const highConfidenceCount = allFields.filter((f) => f.confidenceLevel === 'high').length
+  const mediumConfidenceCount = allFields.filter((f) => f.confidenceLevel === 'medium').length
+  const lowConfidenceCount = allFields.filter((f) => f.confidenceLevel === 'low').length
+
   return (
     <div className="flex-1 flex min-h-0 overflow-hidden">
-      {/* LEFT PANEL - Field List (320px) */}
-      <aside className="w-[320px] flex-shrink-0 border-r border-border-light bg-bg-primary flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-border-light">
-          <div className="flex items-center gap-2">
-            <FileText className="h-6 w-6 text-primary" />
-            <h2 className="text-lg font-semibold">Extracted Fields</h2>
+      {/* LEFT PANEL - Document Viewer (collapsible) */}
+      <div
+        className={cn(
+          'border-r border-border-light bg-gray-100 flex flex-col transition-all duration-300',
+          isDocumentPanelOpen ? 'w-[50%] min-w-[400px]' : 'w-0 min-w-0 overflow-hidden'
+        )}
+      >
+        {isDocumentPanelOpen && (
+          <ExtractionDocumentViewer
+            pages={documentPages}
+            boundingBoxes={boundingBoxes}
+            currentPage={currentPage}
+            onPageChange={setCurrentPage}
+            activeFieldId={activeFieldId}
+            hoveredFieldId={hoveredFieldId}
+            onFieldHover={setHoveredField}
+            onFieldClick={setActiveField}
+            showAllHighlights={showAllHighlights}
+            onToggleHighlights={setShowAllHighlights}
+            className="flex-1"
+          />
+        )}
+      </div>
+
+      {/* Document Panel Toggle Button */}
+      <Button
+        variant="outline"
+        size="icon"
+        className={cn(
+          'absolute left-2 top-1/2 -translate-y-1/2 z-30 h-10 w-6 rounded-r-lg rounded-l-none',
+          'bg-white shadow-md hover:bg-gray-50 transition-all',
+          isDocumentPanelOpen && 'left-[calc(50%-12px)]'
+        )}
+        onClick={toggleDocumentPanel}
+        title={isDocumentPanelOpen ? 'Hide document' : 'Show document'}
+      >
+        {isDocumentPanelOpen ? (
+          <PanelLeftClose className="h-4 w-4" />
+        ) : (
+          <PanelLeftOpen className="h-4 w-4" />
+        )}
+      </Button>
+
+      {/* RIGHT PANEL - Field Editor */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-bg-secondary">
+        {/* Header with controls */}
+        <div className="px-4 py-3 bg-white border-b border-border-light">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileText className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold">Extraction Editor</h2>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {/* Confidence summary */}
+              <div className="flex items-center gap-3 text-xs mr-4">
+                <div className="flex items-center gap-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  <span className="font-medium">{highConfidenceCount}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                  <span className="font-medium">{mediumConfidenceCount}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                  <span className="font-medium">{lowConfidenceCount}</span>
+                </div>
+              </div>
+
+              {/* Toggle document panel (mobile) */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 md:hidden"
+                onClick={toggleDocumentPanel}
+              >
+                {isDocumentPanelOpen ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                Document
+              </Button>
+            </div>
           </div>
         </div>
 
-        <ScrollArea className="flex-1 p-4">
-          <div className="space-y-4">
-              {/* Summary */}
-              <Card className="bg-gradient-to-r from-primary/5 to-primary-light/5">
-                <CardContent className="p-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium">Total Fields</span>
-                      <span className="text-2xl font-bold text-primary">
-                        {allFields.length}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs">
-                      <span className="flex items-center gap-1 text-success">
-                        <div className="w-1.5 h-1.5 rounded-full bg-success" />
-                        {allFields.filter((f) => f.confidenceLevel === 'high').length} High
-                      </span>
-                      <span className="flex items-center gap-1 text-warning">
-                        <div className="w-1.5 h-1.5 rounded-full bg-warning" />
-                        {allFields.filter((f) => f.confidenceLevel === 'medium').length} Medium
-                      </span>
-                      <span className="flex items-center gap-1 text-error">
-                        <div className="w-1.5 h-1.5 rounded-full bg-error" />
-                        {allFields.filter((f) => f.confidenceLevel === 'low').length} Low
-                      </span>
-                    </div>
+        {/* Scrollable content */}
+        <ScrollArea className="flex-1">
+          <div className="p-4 space-y-4 max-w-3xl mx-auto">
+            {/* Workflow Stepper */}
+            <Card>
+              <CardContent className="p-4">
+                <WorkflowStepper currentStep={4} showLabels showNumbers={false} />
+              </CardContent>
+            </Card>
+
+            {/* Instructions */}
+            <Card className="bg-gradient-to-r from-primary/5 to-primary-light/5 border-primary/20">
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-primary/10">
+                    <Layers className="h-4 w-4 text-primary" />
                   </div>
-                </CardContent>
-              </Card>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold mb-1">
+                      Visual Validation Mode
+                    </h3>
+                    <p className="text-xs text-text-secondary">
+                      Click or hover on any field to see its source location highlighted in the document.
+                      Fields are color-coded by confidence level. Edit any field that needs correction.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-              {/* Compact Field List */}
-              <div className="space-y-2 pr-4">
-                <p className="text-xs font-medium text-text-secondary px-1">
-                  ALL FIELDS
-                </p>
-                {allFields.map((field) => (
-                  <CompactExtractedField
-                    key={field.id}
-                    field={field}
-                    isActive={activeFieldId === field.id}
-                    onClick={() => setActiveFieldId(field.id)}
-                  />
-                ))}
-              </div>
-
-              {/* Warnings */}
-              {allFields.filter((f) => f.confidenceLevel === 'low').length > 0 && (
-                <Card className="border-warning bg-warning/5">
-                  <CardContent className="p-3">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
-                      <div className="flex-1">
-                        <p className="text-xs font-medium text-warning mb-1">
-                          Review Required
-                        </p>
+            {/* Field Groups */}
+            {mockFieldGroups.map((group) => (
+              <Card key={group.id}>
+                <CardContent className="p-4">
+                  {/* Group Header */}
+                  <button
+                    onClick={() => toggleGroup(group.id)}
+                    className="w-full flex items-center justify-between mb-4 text-left hover:opacity-80 transition-opacity"
+                  >
+                    <div className="flex items-center gap-3">
+                      {group.icon && (
+                        <div className="p-2 rounded-lg bg-primary/10 text-primary">
+                          {group.icon}
+                        </div>
+                      )}
+                      <div>
+                        <h3 className="text-sm font-semibold">{group.name}</h3>
                         <p className="text-xs text-text-secondary">
-                          {allFields.filter((f) => f.confidenceLevel === 'low').length}{' '}
-                          field(s) need manual review before processing
+                          {group.fields.length} field{group.fields.length !== 1 ? 's' : ''}
                         </p>
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          </ScrollArea>
-      </aside>
 
-      {/* CENTER PANEL - Field Groups */}
-      <main className="flex-1 min-w-0 overflow-y-auto bg-bg-secondary">
-        <div className="p-6 space-y-6 max-w-4xl mx-auto">
-          {/* Workflow Stepper */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Workflow Progress</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <WorkflowStepper currentStep={4} showLabels showNumbers={false} />
-            </CardContent>
-          </Card>
+                    {/* Status indicators */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="flex items-center gap-1 text-emerald-600">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        {group.fields.filter((f) => f.confidenceLevel === 'high').length}
+                      </span>
+                      <span className="flex items-center gap-1 text-amber-600">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                        {group.fields.filter((f) => f.confidenceLevel === 'medium').length}
+                      </span>
+                      <span className="flex items-center gap-1 text-red-600">
+                        <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                        {group.fields.filter((f) => f.confidenceLevel === 'low').length}
+                      </span>
+                    </div>
+                  </button>
 
-          {/* Instructions */}
-          <Card className="bg-gradient-to-r from-primary/5 to-primary-light/5">
-            <CardContent className="p-4">
-              <div className="flex items-start gap-3">
-                <FileCheck className="h-5 w-5 text-primary mt-0.5" />
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold mb-1">
-                    Extraction Editor
-                  </h3>
-                  <p className="text-xs text-text-secondary">
-                    Review and edit extracted data fields. Fields are grouped by category
-                    and color-coded by confidence. Click any field to view source or make
-                    changes.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Field Groups */}
-          <div className="space-y-4">
-            {mockFieldGroups.map((group) => (
-              <FieldGroup
-                key={group.id}
-                group={group}
-                isExpanded={expandedGroups.has(group.id)}
-                onToggle={() => toggleGroup(group.id)}
-                editingFieldId={editingFieldId}
-                onFieldEdit={(fieldId) => {
-                  setEditingFieldId(fieldId)
-                  setActiveFieldId(fieldId)
-                }}
-                onFieldSave={handleFieldSave}
-                onFieldCancel={() => {
-                  setEditingFieldId(null)
-                  setActiveFieldId(null)
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Legend */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Confidence Levels</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="p-3 rounded-lg border border-success/30 bg-success/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-3 h-3 rounded-full bg-success" />
-                    <span className="text-sm font-medium">High (≥90%)</span>
-                  </div>
-                  <p className="text-xs text-text-secondary">
-                    Auto-accepted, no review needed
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-lg border border-warning/30 bg-warning/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-3 h-3 rounded-full bg-warning" />
-                    <span className="text-sm font-medium">Medium (70-89%)</span>
-                  </div>
-                  <p className="text-xs text-text-secondary">
-                    Review suggested but optional
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-lg border border-error/30 bg-error/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-3 h-3 rounded-full bg-error" />
-                    <span className="text-sm font-medium">Low (&lt;70%)</span>
-                  </div>
-                  <p className="text-xs text-text-secondary">
-                    Manual review required
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Actions */}
-          <Card className="border-primary/30 bg-primary/5">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between gap-4">
-                <Button
-                  variant="outline"
-                  onClick={() => navigateToStep('quality-check', caseId || undefined)}
-                  className="gap-2"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  Back to Quality Check
-                </Button>
-
-                <div className="flex items-center gap-2">
-                  {allFields.filter((f) => f.confidenceLevel === 'low').length > 0 ? (
-                    <AlertTriangle className="h-5 w-5 text-warning" />
-                  ) : (
-                    <FileCheck className="h-5 w-5 text-success" />
+                  {/* Field Cards */}
+                  {expandedGroups.has(group.id) && (
+                    <div className="space-y-3">
+                      {group.fields.map((field) => (
+                        <SyncedFieldCard
+                          key={field.id}
+                          field={{ ...field, groupName: group.name }}
+                          isActive={activeFieldId === field.id}
+                          isHovered={hoveredFieldId === field.id}
+                          onHover={setHoveredField}
+                          onClick={setActiveField}
+                          onEdit={setEditingFieldId}
+                          registerRef={registerFieldRef}
+                        />
+                      ))}
+                    </div>
                   )}
-                  <div>
-                    <p className="text-sm font-medium">
-                      {allFields.filter((f) => f.confidenceLevel === 'low').length > 0
-                        ? 'Action Required'
-                        : 'All Fields Ready'}
-                    </p>
-                    <p className="text-xs text-text-secondary">
-                      {allFields.filter((f) => f.confidenceLevel === 'low').length > 0
-                        ? 'Complete required field reviews'
-                        : 'Proceed to rules evaluation'}
-                    </p>
+                </CardContent>
+              </Card>
+            ))}
+
+            {/* Legend */}
+            <Card>
+              <CardHeader className="py-3">
+                <CardTitle className="text-sm">Confidence Levels</CardTitle>
+              </CardHeader>
+              <CardContent className="py-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-2.5 rounded-lg border border-emerald-200 bg-emerald-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-3 h-3 rounded-full bg-emerald-500" />
+                      <span className="text-xs font-medium">High (≥90%)</span>
+                    </div>
+                    <p className="text-xs text-text-secondary">Auto-accepted</p>
+                  </div>
+                  <div className="p-2.5 rounded-lg border border-amber-200 bg-amber-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-3 h-3 rounded-full bg-amber-500" />
+                      <span className="text-xs font-medium">Medium (70-89%)</span>
+                    </div>
+                    <p className="text-xs text-text-secondary">Review suggested</p>
+                  </div>
+                  <div className="p-2.5 rounded-lg border border-red-200 bg-red-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-3 h-3 rounded-full bg-red-500" />
+                      <span className="text-xs font-medium">Low (&lt;70%)</span>
+                    </div>
+                    <p className="text-xs text-text-secondary">Review required</p>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
 
-                <Button
-                  size="lg"
-                  onClick={() => navigateToStep('rules', caseId || undefined)}
-                  className="gap-2"
-                >
-                  Continue to Rules
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </main>
+            {/* Navigation Actions */}
+            <Card className="border-primary/30 bg-primary/5">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <Button
+                    variant="outline"
+                    onClick={() => navigateToStep('quality-check', caseId || undefined)}
+                    className="gap-2"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Back to Quality Check
+                  </Button>
+
+                  <div className="flex items-center gap-2 text-center">
+                    {lowConfidenceCount > 0 ? (
+                      <AlertTriangle className="h-5 w-5 text-amber-500" />
+                    ) : (
+                      <FileCheck className="h-5 w-5 text-emerald-500" />
+                    )}
+                    <div>
+                      <p className="text-sm font-medium">
+                        {lowConfidenceCount > 0
+                          ? `${lowConfidenceCount} field${lowConfidenceCount > 1 ? 's' : ''} need review`
+                          : 'All fields ready'}
+                      </p>
+                      <p className="text-xs text-text-secondary">
+                        {lowConfidenceCount > 0
+                          ? 'Complete reviews to continue'
+                          : 'Proceed to rules evaluation'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <Button
+                    size="lg"
+                    onClick={() => navigateToStep('rules', caseId || undefined)}
+                    className="gap-2"
+                  >
+                    Continue to Rules
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </ScrollArea>
+      </div>
     </div>
   )
 }
