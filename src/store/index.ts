@@ -202,7 +202,7 @@ const initialProcessingState: ProcessingStateMap = {
 }
 
 const createProcessingStateSlice = (
-  set: (partial: ProcessingStateMap | Partial<ProcessingStateMap>) => void
+  set: (partial: ProcessingStateMap | Partial<ProcessingStateMap> | ((state: ProcessingStateMap) => ProcessingStateMap | Partial<ProcessingStateMap>)) => void
 ) => ({
   ...initialProcessingState,
 
