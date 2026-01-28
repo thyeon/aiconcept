@@ -178,7 +178,7 @@ export class WSClient {
   private startHeartbeat(): void {
     this.heartbeatTimer = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.send({ type: 'ping', data: {} })
+        this.send('ping', {})
       }
     }, this.heartbeatInterval)
   }
